@@ -5,11 +5,10 @@ import main
 # load stored API keys
 config = configparser.ConfigParser()
 config.read("config.ini")
-app_id = config["here"]["app_id"]
-app_code = config["here"]["app_code"]
+api_key = config["here"]["api_key"]
 
 # set up the scraper and start scraping
-scraper = main.HerePlacesScraper("harvard_longwood.db", app_id, app_code)
+scraper = main.HerePlacesScraper("harvard_longwood.db", api_key)
 scraper.scrape(main.Rectangle(-71.1054416355, 42.3346006792, -71.1001952347, 42.3393749713))
 
 # how many results did we get?

@@ -116,12 +116,18 @@ class Rectangle:
         return subdivisions
 
 
-class HerePlaces:
+class HerePlacesV1:
+    """ **DEPRECATED**: Class providing access to the HERE Places API v1.
+
+    Use of the v1 API has been deprecated by HERE; see HerePlaces for the v7
+    API.
+    """
+
     BASE_URL = "https://places.api.here.com/places/v1/"
-    BROWSE_ENDPOINT = "%s/browse" % BASE_URL
+    BROWSE_ENDPOINT = "{}/browse".format(BASE_URL)
 
     def __init__(self, app_id: str, app_code: str):
-        """ Initialize HerePlaces object.
+        """ Initialize HerePlacesV1 object.
 
         Args:
             app_id: The HERE APP ID to use for the Places API.
@@ -130,10 +136,6 @@ class HerePlaces:
 
         self.app_id = app_id
         self.app_code = app_code
-        self.default_params = {
-            "app_id": self.app_id,
-            "app_code": self.app_code
-        }
 
     def browse(self,
                in_: Rectangle,
@@ -156,7 +158,8 @@ class HerePlaces:
         """
 
         params = {
-            **self.default_params,
+            "app_id": self.app_id,
+            "app_code": self.app_code,
             "in": "{},{},{},{}".format(*in_.to_tuple()),
             "size": size
         }
@@ -172,11 +175,74 @@ class HerePlaces:
             return response.json()["results"]["items"]
 
 
+class HerePlacesV7:
+    """ Class providing access to the HERE Geocoding & Search API v7. """
+
+    BROWSE_ENDPOINT = "https://browse.search.hereapi.com/v1/browse"
+
+    def __init__(self, api_key: str):
+        """ Initialize HerePlacesV7 object.
+
+        Args:
+            api_key: The HERE API key to use for the Geocoding & Search API.
+        """
+
+        self.api_key = api_key
+
+    def browse(self,
+               rect: Rectangle,
+               limit: int = 100,
+               cat: typing.Optional[typing.Union[str, typing.List[str]]] = None
+               ) -> typing.Optional[typing.List[dict]]:
+        """ Browse for places in a given area.
+
+        Args:
+            in_: The area to search in. The HERE API takes either a circle and
+                radius or a rectangle; currently, only rectangular queries are
+                supported.
+            size: The maximum number of places to be returned.
+            cat: A category or list of categories to restrict the search to. For
+                a list of categories, see:
+                https://developer.here.com/documentation/places/dev_guide/topics/categories.html
+
+        Returns: A list of HERE places if the request was successful; otherwise,
+            None. Each place is a dict.
+        """
+
+        centroid = rect.centroid
+        params = {
+            "apiKey": self.api_key,
+            "at": "{},{}".format(centroid[1], centroid[0]),
+            "in": "bbox:{},{},{},{}".format(*rect.to_tuple()),
+            "limit": limit
+        }
+
+        if cat is not None:
+            if type(cat) is str:
+                params.update({"cat": cat})
+            else:
+                params.update({"cat": ",".join(cat)})
+
+        response = requests.get(self.BROWSE_ENDPOINT, params=params)
+        if response.status_code == 200:
+            return response.json()["items"]
+
+#%%
+
 class HerePlacesScraper:
     """ Scraper for HERE places API. """
 
+    # HERE places a 250km max limit on the Browse endpoint. see:
+    # https://developer.here.com/documentation/geocoding-search-api/dev_guide/topics/endpoint-browse-brief.html
+    # to be safe, we will limit this further to only 240km
+    MAX_RADIUS_KM = 240
+
+    # max number of categories to export in CSV
+    MAX_CATEGORIES = 5
+
     def __init__(self,
                  db_path: str,
+                 api_key: typing.Optional[str] = None,
                  app_id: typing.Optional[str] = None,
                  app_code: typing.Optional[str] = None):
         """ Initialize a new Scraper object.
@@ -186,14 +252,17 @@ class HerePlacesScraper:
                 data. A new one will be created if it does not exist.
             app_id: The HERE APP ID to use for the Places API.
             app_code: The HERE APP code to use for the Places API.
+            api_key: The HERE API key to use for the Geocoding & Search API.
         """
 
         self.db_path = db_path
 
-        if (app_id is not None) and (app_code is not None):
-            self.here = HerePlaces(app_id, app_code)
+        if app_id and app_code:
+            self.here = HerePlacesV1(app_id, app_code)
+        elif api_key:
+            self.here = HerePlacesV7(api_key)
         else:
-            print("WARNING: no app_id or app_code provided; scraping not possible")
+            print("WARNING: no authentication provided; scraping not possible")
             self.here = None
 
         self.n_requests_made = 0
@@ -285,6 +354,45 @@ class HerePlacesScraper:
             writer = csv.DictWriter(
                 output_fp,
                 fieldnames=[
+                    "lon", "lat", "id", "title", "street", "houseNumber", "postalCode",
+                ] + [
+                    "category{}".format(i)
+                    for i in range(1, self.MAX_CATEGORIES + 1)
+                ]
+            )
+            writer.writeheader()
+            for place in self.iter_places():
+                print(place)
+                row = {
+                    "lon": place["position"]["lng"],
+                    "lat": place["position"]["lat"],
+                    "id": place["id"],
+                    "street": place["address"].get("street"),
+                    "houseNumber": place["address"].get("houseNumber"),
+                    "postalCode": place["address"]["postalCode"]
+                }
+                for i, category in enumerate(place.get("categories", [])):
+                    if i == self.MAX_CATEGORIES:
+                        break
+                    row["category{}".format(i + 1)] = category["id"]
+                writer.writerow(row)
+
+    def write_csv_v1(self, output_path: str):
+        """  Write stored POI data to a CSV file.
+
+        **DEPRECATED - intended for use with the v1 API only**
+
+        This will not contain all the data contained in places; only the data
+        that seemed to be the most important / relevant / non-duplicative.
+
+        Args:
+            output_path: The path to write data to.
+        """
+
+        with open(output_path, "w") as output_fp:
+            writer = csv.DictWriter(
+                output_fp,
+                fieldnames=[
                     "lon", "lat", "id", "title", "category", "averageRating"
                 ]
             )
@@ -319,7 +427,12 @@ class HerePlacesScraper:
         if self.here is None:
             raise Exception("No app_id or app_code provided")
 
-        for i, subdivision in enumerate(rect.subdivide(3)):
+        subdivisions = rect.subdivide(
+            rows=3, max_radius=self.MAX_RADIUS_KM,
+            max_radius_units=haversine.Unit.KILOMETERS
+        )
+
+        for i, subdivision in enumerate(subdivisions):
             new_id = _id + [i]
             new_id_str = ",".join(map(str, new_id))
 
@@ -367,29 +480,43 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser()
-    subparsers = parser.add_subparsers(help="Command", dest="command")
+    subparsers = parser.add_subparsers(help="Command", dest="command", required=True)
 
     parser.add_argument("-d", "--db", help="The path to the SQLite3 database where data will be stored", required=True)
 
     scrape_parser = subparsers.add_parser("scrape")
-    scrape_parser.add_argument("-a", "--app-id", help="The HERE app ID to use for authentication", required=True)
-    scrape_parser.add_argument("-A", "--app-code", help="The HERE app code to use for authentication", required=True)
+    scrape_parser.add_argument("-a", "--api-key", help="The HERE API key to use for authentication", required=True)
     scrape_parser.add_argument("-r", "--rectangle", help="The rectangle to scrape, in the format \"(min_lon,min_lat,max_lon,max_lat)\"", required=True)
+
+    scrape_v1_parser = subparsers.add_parser("scrape_v1")
+    scrape_v1_parser.add_argument("-a", "--app-id", help="The HERE app ID to use for authentication", required=True)
+    scrape_v1_parser.add_argument("-A", "--app-code", help="The HERE app code to use for authentication", required=True)
+    scrape_v1_parser.add_argument("-r", "--rectangle", help="The rectangle to scrape, in the format \"(min_lon,min_lat,max_lon,max_lat)\"", required=True)
 
     export_parser = subparsers.add_parser("export")
     export_parser.add_argument("-f", "--format", help="The format to export places in", choices=("csv", "json"), required=True)
-    export_parser.add_argument("-o", "--output", help="the path to export places to", required=True)
+    export_parser.add_argument("-o", "--output", help="The path to export places to", required=True)
+    export_parser.add_argument("-v", "--version", help="The version of HERE places being exported", choices=("1", "7"), default="7")
 
     args = parser.parse_args()
 
+    rectangle = Rectangle(*eval(args.rectangle))  # TODO: very hacky
+
     if args.command == "scrape":
-        scraper = HerePlacesScraper(args.db, args.app_id, args.app_code)
-        scraper.scrape(Rectangle(*eval(args.rectangle)))  # TODO: very hacky
+        scraper = HerePlacesScraper(args.db, api_key=args.api_key)
+        scraper.scrape(rectangle)
+
+    elif args.command == "scrape_v1":
+        scraper = HerePlacesScraper(args.db, app_id=args.app_id, app_code=args.app_code)
+        scraper.scrape(rectangle)
 
     elif args.command == "export":
         scraper = HerePlacesScraper(args.db)
         if args.format == "csv":
-            scraper.write_csv(args.output)
+            if args.version == "v1":
+                scraper.write_csv_v1(args.output)
+            else:
+                scraper.write_csv(args.output)
         elif args.format == "json":
             scraper.write_ndjson(args.output)
         print("Exported stored data to {}".format(args.output))
