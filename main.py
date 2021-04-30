@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import configparser
 import csv
 import dataclasses
 import datetime
@@ -127,7 +126,10 @@ class HerePlaces:
 class HerePlacesScraper:
     """ Scraper for HERE places API. """
 
-    def __init__(self, db_path: str, app_id: str, app_code: str):
+    def __init__(self,
+                 db_path: str,
+                 app_id: typing.Optional[str] = None,
+                 app_code: typing.Optional[str] = None):
         """ Initialize a new Scraper object.
 
         Args:
@@ -138,7 +140,12 @@ class HerePlacesScraper:
         """
 
         self.db_path = db_path
-        self.here = HerePlaces(app_id, app_code)
+
+        if (app_id is not None) and (app_code is not None):
+            self.here = HerePlaces(app_id, app_code)
+        else:
+            print("WARNING: no app_id or app_code provided; scraping not possible")
+            self.here = None
 
         self.n_requests_made = 0
         self.n_places_encountered = 0
@@ -243,7 +250,6 @@ class HerePlacesScraper:
                     "averageRating": place["averageRating"]
                 })
 
-
     def scrape(self,
                rect: Rectangle,
                skip_to: typing.Optional[T_SubdivisionID] = None,
@@ -260,6 +266,9 @@ class HerePlacesScraper:
 
         # TODO: there's probably a better way to implement skipping
         # functionality - look into later
+
+        if self.here is None:
+            raise Exception("No app_id or app_code provided")
 
         for i, subdivision in enumerate(rect.subdivide(3)):
             new_id = _id + [i]
@@ -303,3 +312,34 @@ class HerePlacesScraper:
                 if skip_to_cropped == new_id:
                     self.scrape(subdivision, skip_to, new_id)
 
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    subparsers = parser.add_subparsers(help="Command", dest="command")
+
+    parser.add_argument("-d", "--db", help="The path to the SQLite3 database where data will be stored", required=True)
+
+    scrape_parser = subparsers.add_parser("scrape")
+    scrape_parser.add_argument("-a", "--app-id", help="The HERE app ID to use for authentication", required=True)
+    scrape_parser.add_argument("-A", "--app-code", help="The HERE app code to use for authentication", required=True)
+    scrape_parser.add_argument("-r", "--rectangle", help="The rectangle to scrape, in the format \"(min_lon,min_lat,max_lon,max_lat)\"", required=True)
+
+    export_parser = subparsers.add_parser("export")
+    export_parser.add_argument("-f", "--format", help="The format to export places in", choices=("csv", "json"), required=True)
+    export_parser.add_argument("-o", "--output", help="the path to export places to", required=True)
+
+    args = parser.parse_args()
+
+    if args.command == "scrape":
+        scraper = HerePlacesScraper(args.db, args.app_id, args.app_code)
+        scraper.scrape(Rectangle(*eval(args.rectangle))) # TODO: very hacky
+
+    elif args.command == "export":
+        scraper = HerePlacesScraper(args.db)
+        if args.format == "csv":
+            scraper.write_csv(args.output)
+        elif args.format == "json":
+            scraper.write_ndjson(args.output)
+        print("Exported stored data to {}".format(args.output))
