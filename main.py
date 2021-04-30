@@ -369,7 +369,7 @@ class HerePlacesScraper:
                     "id": place["id"],
                     "street": place["address"].get("street"),
                     "houseNumber": place["address"].get("houseNumber"),
-                    "postalCode": place["address"]["postalCode"]
+                    "postalCode": place["address"].get("postalCode")
                 }
                 for i, category in enumerate(place.get("categories", [])):
                     if i == self.MAX_CATEGORIES:
