@@ -362,7 +362,6 @@ class HerePlacesScraper:
             )
             writer.writeheader()
             for place in self.iter_places():
-                print(place)
                 row = {
                     "lon": place["position"]["lng"],
                     "lat": place["position"]["lat"],
