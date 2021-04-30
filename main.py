@@ -4,10 +4,12 @@ import csv
 import dataclasses
 import datetime
 import json
+import math
 import sqlite3
 import typing
 import zlib
 
+import haversine
 import requests
 
 T_SubdivisionID = typing.List[int]
@@ -22,6 +24,42 @@ class Rectangle:
     max_x: float
     max_y: float
 
+    @property
+    def centroid(self) -> typing.Tuple[float, float]:
+        """ Calculate the average x and y.
+
+        Returns: A tuple containing the average x and y, as floats.
+        """
+
+        return (self.min_x + self.max_x) / 2, (self.min_y + self.max_y) / 2
+
+    def radius(self, unit: typing.Optional[haversine.Unit] = None):
+        """ Calculate the maximum radius of this rectangle, calculated as the
+        distance between the bottom left and top right corners.
+
+        The default behaviour is to calculate the cartesian distance, but
+        great-circle distances can also be calculated in standard units by
+        providing the `unit` argument.
+
+        Args:
+            unit: If specified, output in these units, using the haversine
+                formula to account for curvature.
+
+        Returns: The maximum radius of this rectangle, as a float.
+        """
+
+        if unit is None:
+            return math.sqrt(
+                (self.max_x - self.min_x)**2 +
+                (self.max_y - self.min_y)**2
+            )
+        else:
+            return haversine.haversine(
+                (self.min_x, self.min_y),
+                (self.max_x, self.max_y),
+                unit
+            )
+
     def to_tuple(self) -> typing.Tuple[float, float, float, float]:
         """ Convert the Rectangle into a tuple of floats in standard GIS format.
 
@@ -32,7 +70,9 @@ class Rectangle:
 
     def subdivide(self,
                   rows: int,
-                  columns: typing.Optional[int] = None
+                  columns: typing.Optional[int] = None,
+                  max_radius: typing.Optional[float] = None,
+                  max_radius_units: typing.Optional[haversine.Unit] = None
                   ) -> typing.List[Rectangle]:
         """ Subdivide this Rectangle into a list of smaller rectangles, each of
         equal size.
@@ -63,6 +103,15 @@ class Rectangle:
                 self.min_x + subdivision_width * (subdivision_column + 1),
                 self.min_y + subdivision_height * (subdivision_row + 1)
             ))
+
+        if max_radius and (subdivisions[0].radius(max_radius_units) > max_radius):
+            subdivisions = [
+                new_subdivision
+                for subdivision in subdivisions
+                for new_subdivision in subdivision.subdivide(
+                    rows, columns, max_radius, max_radius_units
+                )
+            ]
 
         return subdivisions
 
@@ -314,6 +363,7 @@ class HerePlacesScraper:
 
 
 if __name__ == "__main__":
+
     import argparse
 
     parser = argparse.ArgumentParser()
@@ -334,7 +384,7 @@ if __name__ == "__main__":
 
     if args.command == "scrape":
         scraper = HerePlacesScraper(args.db, args.app_id, args.app_code)
-        scraper.scrape(Rectangle(*eval(args.rectangle))) # TODO: very hacky
+        scraper.scrape(Rectangle(*eval(args.rectangle)))  # TODO: very hacky
 
     elif args.command == "export":
         scraper = HerePlacesScraper(args.db)
