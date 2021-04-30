@@ -13,6 +13,8 @@ python3 main.py --db harvard_longwood.db scrape \
 # export
 python3 main.py --db harvard_longwood.db export\
     --format json --output harvard_longwood.json
+python3 main.py --db harvard_longwood.db export\
+    --format csv --output harvard_longwood.csv
 ```
 
 More to follow.
