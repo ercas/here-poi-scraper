@@ -1,21 +1,15 @@
 from __future__ import annotations
 
 import configparser
+import csv
 import dataclasses
 import datetime
 import json
-import os
 import sqlite3
 import typing
 import zlib
 
 import requests
-
-config = configparser.ConfigParser()
-config.read("config.ini")
-
-APP_ID = config["here"]["app_id"]
-APP_CODE = config["here"]["app_code"]
 
 T_SubdivisionID = typing.List[int]
 
@@ -209,6 +203,47 @@ class HerePlacesScraper:
             yield json.loads(zlib.decompress(data))
         cursor.close()
 
+    def write_ndjson(self, output_path: str):
+        """  Write stored POI data to an NDJSON file.
+
+        Args:
+            output_path: The path to write data to.
+        """
+
+        with open(output_path, "w") as output_fp:
+            for place in self.iter_places():
+                output_fp.write(json.dumps(place, separators=(",", ":")))
+                output_fp.write("\n")
+
+    def write_csv(self, output_path: str):
+        """  Write stored POI data to a CSV file.
+
+        This will not contain all the data contained in places; only the data
+        that seemed to be the most important / relevant / non-duplicative.
+
+        Args:
+            output_path: The path to write data to.
+        """
+
+        with open(output_path, "w") as output_fp:
+            writer = csv.DictWriter(
+                output_fp,
+                fieldnames=[
+                    "lon", "lat", "id", "title", "category", "averageRating"
+                ]
+            )
+            writer.writeheader()
+            for place in self.iter_places():
+                writer.writerow({
+                    "lon": place["position"][1],
+                    "lat": place["position"][0],
+                    "id": place["id"],
+                    "title": place["title"],
+                    "category": place["category"]["id"],
+                    "averageRating": place["averageRating"]
+                })
+
+
     def scrape(self,
                rect: Rectangle,
                skip_to: typing.Optional[T_SubdivisionID] = None,
@@ -257,7 +292,7 @@ class HerePlacesScraper:
                         self.n_requests_made, self.n_places_encountered, self.n_total_new_places
                     )
                 ])
-                print(message, end = "\n\n")
+                print(message, end="\n\n")
 
                 if len(places) > 90:
                     self.scrape(subdivision, skip_to, new_id)
@@ -268,14 +303,3 @@ class HerePlacesScraper:
                 if skip_to_cropped == new_id:
                     self.scrape(subdivision, skip_to, new_id)
 
-
-# %%
-
-scraper = HerePlacesScraper("harvard_longwood.db", APP_ID, APP_CODE)
-
-#%%
-scraper.scrape(Rectangle(-71.1054416355,42.3346006792,-71.1001952347,42.3393749713))
-
-# %%
-
-list(scraper.iter_places())
